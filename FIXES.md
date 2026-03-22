@@ -189,6 +189,51 @@ Docker build for `service-b` fails every time with a hard error. The service can
  
 ---
 
+## Fix 8: Hardcoded credentials in GitHub Actions workflow
+ 
+**What was wrong:**
+The `.github/workflows/deploy.yml` file had real Docker Hub credentials hardcoded directly in the workflow file — username and password were both visible in plain text. A hardcoded server IP with root SSH access was also present.
+ 
+**Why it is a problem:**
+Any file committed to a GitHub repository is visible to everyone with repo access. If the repo is public, the credentials are exposed to the entire internet. Even in a private repo, credentials in code are a serious security risk — they get copied, shared, and leaked. The password is also permanently in the git history even after deletion.
+ 
+**How I fixed it:**
+Removed all hardcoded credentials. Moved them to GitHub repository secrets which are encrypted, never exposed in logs, and not visible even to repo admins after being set. Used `--password-stdin` instead of passing the password via CLI flag.
+ 
+```yaml
+# Before — credentials hardcoded in plain text
+- name: Build and push
+  run: |
+    docker login -u myuser -p admin@123
+    docker build -t myorg/devops-app:latest ./service-a
+    docker push myorg/devops-app:latest
+ 
+# After — credentials read from GitHub secrets
+- name: Log in to Docker Hub
+  run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+ 
+- name: Build and push service-a
+  run: |
+    docker build -t ${{ secrets.DOCKER_USERNAME }}/devops-app:latest ./service-a
+    docker push ${{ secrets.DOCKER_USERNAME }}/devops-app:latest
+```
+ 
+**Secrets added to GitHub:**
+ 
+| Secret Name | Description |
+|---|---|
+| `DOCKER_USERNAME` | Docker Hub username |
+| `DOCKER_PASSWORD` | Docker Hub password or access token |
+ 
+**What changed:**
+- Hardcoded `akondocker97` → `${{ secrets.DOCKER_USERNAME }}`
+- Hardcoded password → `${{ secrets.DOCKER_PASSWORD }}` via `--password-stdin`
+- Removed hardcoded root SSH with IP address — needs proper `SSH_PRIVATE_KEY` secret
+ 
+**What could go wrong if left unfixed:**
+Docker Hub account gets compromised. Anyone with repo access can pull, push, or delete your Docker images. If the repo is public, credentials are exposed to the entire internet and bots will find them within minutes.
+ 
+---
 
 
 ## Fix 1: [Short title of the issue]
