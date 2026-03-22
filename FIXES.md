@@ -734,6 +734,3 @@ tags = local.tags
 This means adding a new tag only requires changing one place — the `locals` block — instead of editing every resource individually.
  
 ---
-
-
-
