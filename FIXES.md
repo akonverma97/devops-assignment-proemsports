@@ -355,7 +355,7 @@ kubectl port-forward svc/service-a 5000:5000
 # Expected output:
 # Forwarding from 127.0.0.1:5000 -> 5000
 ```
- 
+
 ```bash
 # Terminal 2 — test all endpoints
 curl http://localhost:5000/health
@@ -395,6 +395,78 @@ kubectl delete -f k8s/deployment.yaml
 Without port-forward or a proper ingress, the app is unreachable on Mac even with NodePort set. The deployment would silently appear healthy while being completely inaccessible for testing and verification.
  
 ---
+
+## Fix : Docker Hub authentication failing — requires Personal Access Token (PAT)
+
+**What was wrong:**
+The GitHub Actions pipeline was using the Docker Hub account password directly as `DOCKER_PASSWORD` secret. Docker Hub now requires a Personal Access Token (PAT) instead of a plain password for CLI and API authentication.
+
+**Why it is a problem:**
+Docker Hub blocked the login with this error:
+```
+Error response from daemon: unauthorized: your account must log in with a
+Personal Access Token (PAT)
+```
+This caused the entire pipeline to fail at the login step, meaning no image could be built or pushed to Docker Hub. The build and deploy jobs both fail as a result.
+
+**How I fixed it:**
+Generated a Personal Access Token on Docker Hub with `Read & Write` access and updated the `DOCKER_PASSWORD` GitHub secret with the PAT value instead of the account password. No changes were needed to the pipeline file itself — it already used `--password-stdin` which is the correct and secure way to pass credentials to Docker.
+
+**Steps to generate and apply the PAT:**
+
+1. Go to Docker Hub and generate the token:
+```
+https://hub.docker.com
+→ Account Settings
+→ Security
+→ Personal Access Tokens
+→ Generate New Token
+  → Description: github-actions
+  → Access: Read & Write
+  → Click Generate
+  → Copy the token: dckr_pat_xxxxxxxxxxxx
+```
+
+2. Update the GitHub secret:
+```
+GitHub Repo
+→ Settings
+→ Secrets and variables
+→ Actions
+→ DOCKER_PASSWORD → Edit
+→ Paste the PAT token
+→ Click Update secret
+```
+
+3. Trigger the pipeline:
+```bash
+git commit --allow-empty -m "fix: switch Docker Hub auth to PAT token"
+git push origin main
+```
+
+**What the pipeline login step looks like — no changes needed:**
+
+```yaml
+- name: Log in to Docker Hub
+  run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+```
+
+- `DOCKER_USERNAME` — stays as `akondocker97`, no change needed
+- `DOCKER_PASSWORD` — updated from plain password to PAT token `dckr_pat_xxxxxxxxxxxx`
+
+**What could go wrong if left unfixed:**
+The pipeline fails on every push at the Docker login step. No images can be built or pushed to Docker Hub. The deploy job never runs because it depends on the build job succeeding. The entire CI/CD pipeline is broken.
+
+---
+
+**Git commit:**
+
+```bash
+git commit --allow-empty -m "fix: switch Docker Hub auth to PAT token"
+git push origin main
+```
+
+--
 
 
 
