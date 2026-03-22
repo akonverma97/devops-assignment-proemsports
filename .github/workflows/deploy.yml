@@ -19,6 +19,22 @@ jobs:
           docker build -t ${{ secrets.DOCKER_USERNAME }}/devops-app:latest ./service-a
           docker push ${{ secrets.DOCKER_USERNAME }}/devops-app:latest
 
-      # - name: Deploy to server
-      #   run: |
-      #     ssh -o StrictHostKeyChecking=no root@203.0.113.45 "docker pull myorg/devops-app:latest && docker restart service-a"
+  deploy:
+    runs-on: self-hosted        # ← runs on your Mac
+    needs: build                # ← waits for build job to finish
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to local Kubernetes
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl rollout restart deployment/service-a
+          kubectl rollout status deployment/service-a --timeout=60s
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods
+          kubectl port-forward svc/service-a 5000:5000 &
+          sleep 3
+          curl http://localhost:5000/health
