@@ -1,0 +1,22 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build and push
+        run: |
+          docker login -u myuser -p mypassword123
+          docker build -t myorg/devops-app:latest ./service-a
+          docker push myorg/devops-app:latest
+
+      - name: Deploy to server
+        run: |
+          ssh -o StrictHostKeyChecking=no root@203.0.113.45 "docker pull myorg/devops-app:latest && docker restart service-a"
