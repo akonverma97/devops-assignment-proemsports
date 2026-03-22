@@ -6,8 +6,8 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - DB_PASSWORD=admin1234
-      - SECRET_KEY=supersecret123
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_PASSWORD=${DB_PASSWORD}
 
   service-b:
     build: ./service-b
