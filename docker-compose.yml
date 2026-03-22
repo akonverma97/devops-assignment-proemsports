@@ -14,4 +14,4 @@ services:
     depends_on:
       - service-a
     environment:
-      - SERVICE_A_URL=http://localhost:5000
+      - SERVICE_A_URL=http://service-a:5000
