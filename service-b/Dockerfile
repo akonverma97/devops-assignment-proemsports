@@ -1,12 +1,13 @@
-# Service B Dockerfile
-FROM node:18
+FROM node:18-slim
 
 WORKDIR /app
 
+COPY package*.json ./
+RUN npm ci
+
 COPY . .
 
-RUN npm install
-
-USER root
+RUN adduser --disabled-password --gecos "" appuser
+USER appuser
 
 CMD ["node", "worker.js"]
