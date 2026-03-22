@@ -115,7 +115,7 @@ A compromised Flask process has full root access inside the container. Slow buil
  
 ---
  
-## Fix 4: Running as root — service-b Dockerfile
+## Fix : Running as root — service-b Dockerfile
  
 **What was wrong:**
 Same root user issue as service-a. `COPY . .` was done before `npm install`, breaking layer caching. `npm install` was used instead of `npm ci`, which does not enforce the lockfile and can silently install different package versions than what was tested locally.
@@ -165,7 +165,7 @@ Any vulnerability in the Node.js process or npm dependencies gives an attacker r
  
 ---
  
-## Fix 5: Missing package-lock.json for npm ci
+## Fix : Missing package-lock.json for npm ci
  
 **What was wrong:**
 `package-lock.json` was not present in the `service-b` directory, which is required for `npm ci` to work.
@@ -189,7 +189,7 @@ Docker build for `service-b` fails every time with a hard error. The service can
  
 ---
 
-## Fix 8: Hardcoded credentials in GitHub Actions workflow
+## Fix : Hardcoded credentials in GitHub Actions workflow
  
 **What was wrong:**
 The `.github/workflows/deploy.yml` file had real Docker Hub credentials hardcoded directly in the workflow file — username and password were both visible in plain text. A hardcoded server IP with root SSH access was also present.
@@ -234,6 +234,168 @@ Removed all hardcoded credentials. Moved them to GitHub repository secrets which
 Docker Hub account gets compromised. Anyone with repo access can pull, push, or delete your Docker images. If the repo is public, credentials are exposed to the entire internet and bots will find them within minutes.
  
 ---
+
+
+## Fix : Kubernetes deployment not accessible from localhost
+ 
+**What was wrong:**
+The `k8s/deployment.yaml` had three issues:
+- `image: myorg/devops-app:latest` was a fake placeholder image name, not a real Docker Hub image
+- The Service had no `type` defined, defaulting to `ClusterIP` which is only accessible inside the cluster
+- No `nodePort` was set, so there was no way to reach the app from the browser or curl on the Mac
+- No `livenessProbe` or `readinessProbe` defined, so Kubernetes had no way to detect a crashed pod
+- No resource `limits` set, only `requests`
+ 
+**Why it is a problem:**
+With a fake image name the pod fails to start because Kubernetes cannot pull the image from Docker Hub. With `ClusterIP` as the service type, the app is completely unreachable from outside the cluster — `curl http://localhost:30500/health` returns connection refused. Without health probes, Kubernetes keeps routing traffic to a crashed or unresponsive pod with no automatic recovery.
+ 
+**How I fixed it:**
+Updated the image to the real Docker Hub image `akondocker97/devops-app:latest`. Changed the Service type to `NodePort` with `nodePort: 30500` so the app is reachable from localhost. Added `livenessProbe` and `readinessProbe` pointing to the `/health` endpoint. Added resource `limits` alongside the existing `requests`.
+ 
+```yaml
+# Before
+containers:
+- name: service-a
+  image: myorg/devops-app:latest        # fake image
+  ports:
+  - containerPort: 5000
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+                                        # no probes
+                                        # no limits
+ 
+---
+apiVersion: v1
+kind: Service
+spec:
+  selector:
+    app: service-a
+  ports:                                # no type = ClusterIP only
+  - port: 5000
+    targetPort: 5000
+                                        # no nodePort
+```
+ 
+```yaml
+# After
+containers:
+- name: service-a
+  image: akondocker97/devops-app:latest
+  ports:
+  - containerPort: 5000
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "200m"
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 5000
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 5000
+    initialDelaySeconds: 5
+    periodSeconds: 10
+ 
+---
+apiVersion: v1
+kind: Service
+spec:
+  selector:
+    app: service-a
+  type: NodePort
+  ports:
+  - port: 5000
+    targetPort: 5000
+    nodePort: 30500
+```
+ 
+**What could go wrong if left unfixed:**
+Pod fails to start due to image pull error. App is completely unreachable from outside the cluster. Crashed pods are not restarted automatically. A runaway pod can consume all CPU and memory on the node, affecting other workloads.
+ 
+---
+ 
+## How to deploy and test locally
+ 
+### Prerequisites
+- Docker Desktop running with Kubernetes enabled
+- `kubectl` installed (`brew install kubectl`)
+- Image pushed to Docker Hub (`akondocker97/devops-app:latest`)
+ 
+### Deploy to local Kubernetes
+ 
+```bash
+# Apply the deployment
+kubectl apply -f k8s/deployment.yaml
+ 
+# Watch pod come up
+kubectl get pods -w
+ 
+# Expected output:
+# NAME                         READY   STATUS    RESTARTS   AGE
+# service-a-796c6fffd9-xxxxx   1/1     Running   0          22s
+```
+ 
+### Access the app
+ 
+Docker Desktop on Mac does not always expose NodePort to localhost directly. Use port-forward instead:
+ 
+```bash
+# Terminal 1 — keep this running
+kubectl port-forward svc/service-a 5000:5000
+ 
+# Expected output:
+# Forwarding from 127.0.0.1:5000 -> 5000
+```
+ 
+```bash
+# Terminal 2 — test all endpoints
+curl http://localhost:5000/health
+# Expected: {"status": "healthy"}
+ 
+curl http://localhost:5000/data
+# Expected: {"records": [1, 2, 3, 4, 5], "source": "service-a"}
+ 
+curl http://localhost:5000/
+# Expected: {"status": "ok", "service": "service-a", "message": "Hello from Service A!"}
+```
+ 
+### Useful commands
+ 
+```bash
+# Check pod status
+kubectl get pods
+ 
+# Check service
+kubectl get svc
+ 
+# View pod logs
+kubectl logs -l app=service-a
+ 
+# Describe pod (useful for debugging)
+kubectl describe pod -l app=service-a
+ 
+# Delete and redeploy
+kubectl delete -f k8s/deployment.yaml
+kubectl apply -f k8s/deployment.yaml
+ 
+# Stop everything
+kubectl delete -f k8s/deployment.yaml
+```
+ 
+**What could go wrong if left unfixed:**
+Without port-forward or a proper ingress, the app is unreachable on Mac even with NodePort set. The deployment would silently appear healthy while being completely inaccessible for testing and verification.
+ 
+---
+
 
 
 ## Fix 1: [Short title of the issue]

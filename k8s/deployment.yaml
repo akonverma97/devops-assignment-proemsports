@@ -14,13 +14,28 @@ spec:
     spec:
       containers:
       - name: service-a
-        image: myorg/devops-app:latest
+        image: akondocker97/devops-app:latest    # ← your real Docker Hub image
         ports:
         - containerPort: 5000
         resources:
           requests:
             memory: "64Mi"
             cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 10
 
 ---
 apiVersion: v1
@@ -30,6 +45,8 @@ metadata:
 spec:
   selector:
     app: service-a
+  type: NodePort              # ← added so you can access from localhost
   ports:
   - port: 5000
     targetPort: 5000
+    nodePort: 30500           # ← access via localhost:30500
