@@ -1,7 +1,27 @@
 # FIXES.md
-
-Document every issue you find and fix in this file.
-
+ 
+**DevOps Take-Home Assignment — Bug Report & Fix Documentation**
+ 
+---
+ 
+## Summary
+ 
+| # | Issue | Severity | File |
+|---|---|---|---|
+| 1 | Wrong service URL in docker-compose.yml | 🔴 CRITICAL | `docker-compose.yml` |
+| 2 | Secrets hardcoded in service-a Dockerfile | 🔴 CRITICAL | `service-a/Dockerfile` |
+| 3 | Running as root in service-a Dockerfile | 🟠 SECURITY | `service-a/Dockerfile` |
+| 4 | Running as root in service-b Dockerfile | 🟠 SECURITY | `service-b/Dockerfile` |
+| 5 | `npm install` instead of `npm ci` + missing lockfile | 🟡 RELIABILITY | `service-b/Dockerfile` |
+| 6 | Hardcoded credentials in GitHub Actions workflow | 🔴 CRITICAL | `.github/workflows/deploy.yml` |
+| 7 | Docker Hub requires PAT token not password | 🔴 CRITICAL | GitHub Secrets |
+| 8 | Fake image name in Kubernetes deployment | 🔴 CRITICAL | `k8s/deployment.yaml` |
+| 9 | Hardcoded AWS credentials in Terraform | 🔴 CRITICAL | `terraform/main.tf` |
+| 10 | Security group open to all ports | 🟠 SECURITY | `terraform/main.tf` |
+| 11 | Missing vpc_id in security group | 🟠 SECURITY | `terraform/main.tf` |
+| 12 | All values hardcoded — no variables | 🟡 RELIABILITY | `terraform/main.tf` |
+| 13 | Missing VPC, subnet, IGW and route table | 🟡 RELIABILITY | `terraform/main.tf` |
+ 
 ---
 
 ## Fix : Hardcoded credentials moved to .env for secure configuration
@@ -715,10 +735,5 @@ This means adding a new tag only requires changing one place — the `locals` bl
  
 ---
 
-## Self-initiated Improvements
 
-### Improvement 1:
-
-
-### Improvement 2:
 
