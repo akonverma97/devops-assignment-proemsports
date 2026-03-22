@@ -468,27 +468,251 @@ git push origin main
 
 --
 
-
-
-## Fix 1: [Short title of the issue]
-
+## Fix : Hardcoded AWS credentials in Terraform provider
+ 
 **What was wrong:**
-
-
+Real AWS `access_key` and `secret_key` values were hardcoded directly in the provider block of `main.tf`.
+ 
 **Why it is a problem:**
-
-
+Committing credentials to a git repository exposes them permanently in the commit history. Even if deleted in a later commit, they remain readable via `git log`. Anyone with repo access can use the keys to provision AWS resources, incur costs, or exfiltrate data. Bots scan GitHub continuously for exposed AWS keys and can use them within minutes.
+ 
 **How I fixed it:**
-
-
+Removed the hardcoded credentials entirely from the provider block. Terraform's AWS provider automatically reads from environment variables `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` or from `~/.aws/credentials`. Region is now read from `var.aws_region` defined in `variables.tf`.
+ 
+```hcl
+# Before — credentials hardcoded in plain text
+provider "aws" {
+  region     = "us-east-1"
+  access_key = "AKIAIOSFODNN7EXAMPLE"
+  secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+}
+ 
+# After — credentials from environment variables
+provider "aws" {
+  region = var.aws_region
+}
+```
+ 
+Set credentials via environment variables:
+```bash
+export AWS_ACCESS_KEY_ID=your_real_key
+export AWS_SECRET_ACCESS_KEY=your_real_secret
+```
+ 
 **What could go wrong if left unfixed:**
-
+AWS account compromised. Attacker can spin up infrastructure, mine cryptocurrency, or exfiltrate data — all billed to the account owner.
+ 
 ---
-
-## Fix 2: [Short title of the issue]
-
-...
-
+ 
+## Fix : Security group open to all ports from all IPs
+ 
+**What was wrong:**
+Both ingress and egress rules allowed all TCP ports (0–65535) from `0.0.0.0/0`. No `description` was set on rules. `vpc_id` was missing from the security group.
+ 
+**Why it is a problem:**
+Fully open firewall exposes SSH (22), database ports, and admin interfaces to the entire internet. Without `vpc_id`, the security group attaches to the default VPC which may not be the intended network. Missing descriptions make it impossible to understand the purpose of each rule during audits.
+ 
+**How I fixed it:**
+Restricted ingress to port 5000 only. Restricted egress to port 443 (HTTPS) only. Added `description` to each rule. Attached security group to the created VPC using `aws_vpc.main.id`.
+ 
+```hcl
+# Before — all ports open, no vpc_id, no descriptions
+resource "aws_security_group" "app_sg" {
+  name = "app-sg"
+ 
+  ingress {
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+ 
+  egress {
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+ 
+# After — restricted ports, vpc_id added, descriptions added
+resource "aws_security_group" "app_sg" {
+  name        = "${local.project_name}-sg"
+  description = "Security group for devops-app"
+  vpc_id      = aws_vpc.main.id
+ 
+  ingress {
+    description = "Allow app traffic on port 5000"
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+ 
+  egress {
+    description = "Allow HTTPS outbound"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+ 
+  tags = local.tags
+}
+```
+ 
+**What could go wrong if left unfixed:**
+Instance completely exposed to the internet. Automated bots attempt brute-force on port 22 within minutes of launch. Security group in wrong VPC causes unpredictable network behaviour.
+ 
+---
+ 
+## Fix : All static values hardcoded in resource blocks
+ 
+**What was wrong:**
+AMI ID, instance type, region, and all other values were hardcoded directly in the resource and provider blocks with no variables.
+ 
+**Why it is a problem:**
+Hardcoded values make the config impossible to reuse across environments (dev, staging, prod) without editing source files directly. Changes require a code commit. No documentation of what values are configurable.
+ 
+**How I fixed it:**
+Extracted all values into a separate `variables.tf` file with descriptions and sensible defaults. Resources now reference `var.*` instead of hardcoded strings.
+ 
+```hcl
+# Before — hardcoded everywhere
+resource "aws_instance" "app" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t2.micro"
+}
+ 
+# After — values from variables.tf
+resource "aws_instance" "app" {
+  ami           = var.ami_id
+  instance_type = var.instance_type
+}
+```
+ 
+**What could go wrong if left unfixed:**
+Cannot deploy to multiple environments. Easy to introduce typos when copying values. No single source of truth for configurable values.
+ 
+---
+ 
+## Fix : Duplicate variables in variables.tf
+ 
+**What was wrong:**
+`variables.tf` had `aws_region`, `ami_id`, `instance_type`, `vpc_cidr`, `subnet_cidr`, and `availability_zone` declared twice each.
+ 
+**Why it is a problem:**
+Terraform throws a validation error and refuses to run:
+```
+Error: Duplicate variable declaration
+```
+The entire infrastructure cannot be planned or applied until duplicates are removed.
+ 
+**How I fixed it:**
+Removed all duplicate variable declarations. Each variable now appears exactly once in `variables.tf`.
+ 
+```hcl
+# Before — duplicate declarations (causes terraform error)
+variable "aws_region" { ... }
+variable "aws_region" { ... }  # duplicate — ERROR
+ 
+variable "ami_id" { ... }
+variable "ami_id" { ... }      # duplicate — ERROR
+ 
+# After — each variable declared exactly once
+variable "aws_region" {
+  description = "AWS region to deploy into"
+  type        = string
+  default     = "us-east-1"
+}
+ 
+variable "ami_id" {
+  description = "AMI ID for EC2 instance"
+  type        = string
+  default     = "ami-0c55b159cbfafe1f0"
+}
+```
+ 
+**What could go wrong if left unfixed:**
+`terraform plan` and `terraform apply` both fail immediately. No infrastructure can be created or modified until the error is fixed.
+ 
+---
+ 
+## Fix : Missing VPC, subnet, internet gateway and route table
+ 
+**What was wrong:**
+The original `main.tf` had only an EC2 instance and a security group. There was no VPC, subnet, internet gateway, or route table defined. The EC2 instance would be placed in the default AWS VPC with no controlled networking.
+ 
+**Why it is a problem:**
+Using the default VPC is insecure and uncontrolled. There is no isolation between this project and other resources in the account. The default VPC cannot be version-controlled or reproduced consistently across accounts or regions.
+ 
+**How I fixed it:**
+Added a complete networking stack managed by Terraform: VPC → Internet Gateway → Public Subnet → Route Table (with IGW route) → Route Table Association → Security Group → EC2 in the subnet.
+ 
+```hcl
+# Added — full networking stack
+resource "aws_vpc" "main" {
+  cidr_block = var.vpc_cidr
+  tags       = local.tags
+}
+ 
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags   = local.tags
+}
+ 
+resource "aws_subnet" "public" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.subnet_cidr
+  availability_zone = var.availability_zone
+  tags              = local.tags
+}
+ 
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+ 
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+ 
+  tags = local.tags
+}
+ 
+resource "aws_route_table_association" "main" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+```
+ 
+**What could go wrong if left unfixed:**
+EC2 instance placed in default VPC with no controlled networking. Cannot reproduce infrastructure across accounts. No isolation between project resources and other AWS resources in the account.
+ 
+---
+ 
+## Self-Initiated Improvement: Added locals block for consistent tagging
+ 
+Instead of repeating tag values in every resource, a `locals` block defines tags once and all resources reference `local.tags`. This ensures every resource has consistent `Name`, `Environment`, `Project`, and `ManagedBy` tags automatically.
+ 
+```hcl
+locals {
+  project_name = "${var.environment}-${var.project}"
+  tags = {
+    Name        = local.project_name
+    Environment = var.environment
+    Project     = var.project
+    ManagedBy   = "Terraform"
+  }
+}
+```
+ 
+Every resource simply uses:
+```hcl
+tags = local.tags
+```
+ 
+This means adding a new tag only requires changing one place — the `locals` block — instead of editing every resource individually.
+ 
 ---
 
 ## Self-initiated Improvements
