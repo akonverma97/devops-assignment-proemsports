@@ -2,10 +2,7 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - develop
-      - main
-  workflow_dispatch:
+    branches: [main]
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/devops-app
@@ -20,56 +17,35 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build and push Docker images
+      - name: Build and push service-a
         run: |
-          IMAGE_SHA=${IMAGE_NAME}:${{ github.sha }}
-          IMAGE_BRANCH=${IMAGE_NAME}:${{ github.ref_name }}
-          echo "Building images: $IMAGE_SHA and $IMAGE_BRANCH"
-          docker build -t $IMAGE_SHA -t $IMAGE_BRANCH ./service-a
-          docker push $IMAGE_SHA
-          docker push $IMAGE_BRANCH
-
+          IMAGE=${IMAGE_NAME}:${{ github.sha }}
+          echo "Building image: $IMAGE"
+          docker build -t $IMAGE ./service-a
+          docker push $IMAGE
   deploy:
     runs-on: self-hosted
     needs: build
-    environment:
-      name: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install envsubst if missing
-        run: |
-          if ! command -v envsubst &> /dev/null; then
-            echo "Installing envsubst..."
-            sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gettext-base
-          fi
-
-      - name: Set deployment environment and image
-        run: |
-          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            NAMESPACE="production"
-          else
-            NAMESPACE="staging"
-          fi
-          echo "DEPLOY_NAMESPACE=$NAMESPACE" >> $GITHUB_ENV
-          IMAGE=${IMAGE_NAME}:${{ github.sha }}
-          echo "DEPLOY_IMAGE=$IMAGE" >> $GITHUB_ENV
-
       - name: Deploy to Kubernetes
         run: |
-          echo "Deploying $DEPLOY_IMAGE to namespace $DEPLOY_NAMESPACE"
-          envsubst < k8s/deployment.yaml | kubectl apply -n $DEPLOY_NAMESPACE -f -
-          kubectl rollout status deployment/service-a -n $DEPLOY_NAMESPACE --timeout=180s
-
-      - name: Wait for Pods to be ready
+          IMAGE=${IMAGE_NAME}:${{ github.sha }}
+          echo "Deploying image: $IMAGE"
+          kubectl apply -f k8s/deployment.yaml
+          # Update deployment with correct tagged image
+          kubectl set image deployment/service-a service-a=$IMAGE
+          kubectl rollout status deployment/service-a --timeout=120s
+      - name: Wait for Pods to be Ready
         run: |
-          kubectl wait --for=condition=ready pod -l app=service-a -n $DEPLOY_NAMESPACE --timeout=180s
-          kubectl get pods -n $DEPLOY_NAMESPACE
-
-      - name: Verify service health
+          kubectl wait --for=condition=ready pod -l app=service-a --timeout=120s
+          kubectl get pods
+      - name: Verify deployment
         run: |
-          POD=$(kubectl get pod -l app=service-a -n $DEPLOY_NAMESPACE -o jsonpath="{.items[0].metadata.name}")
-          echo "Checking health on pod: $POD"
-          kubectl exec -n $DEPLOY_NAMESPACE $POD -- curl -sSf http://localhost:5000/health
+          POD=$(kubectl get pod -l app=service-a -o jsonpath="{.items[0].metadata.name}")
+          echo "Using pod: $POD"
+          kubectl port-forward pod/$POD 5000:5000 > /dev/null 2>&1 &
+          sleep 5
+          curl --fail http://localhost:5000/health
