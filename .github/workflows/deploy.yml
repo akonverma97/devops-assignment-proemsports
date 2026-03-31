@@ -38,6 +38,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Install envsubst
+        run: |
+          # Install envsubst if missing
+          if ! command -v envsubst &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y gettext-base
+          fi
+
       - name: Set deployment environment and image
         run: |
           if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
@@ -52,10 +59,8 @@ jobs:
       - name: Deploy to Kubernetes
         run: |
           echo "Deploying $DEPLOY_IMAGE to namespace $DEPLOY_NAMESPACE"
-          export IMAGE=$DEPLOY_IMAGE
-          export NAMESPACE=$DEPLOY_NAMESPACE
-          envsubst < k8s/deployment.yaml | kubectl apply -n $NAMESPACE -f -
-          kubectl rollout status deployment/service-a -n $NAMESPACE --timeout=180s
+          envsubst < k8s/deployment.yaml | kubectl apply -n $DEPLOY_NAMESPACE -f -
+          kubectl rollout status deployment/service-a -n $DEPLOY_NAMESPACE --timeout=180s
 
       - name: Wait for Pods to be ready
         run: |
