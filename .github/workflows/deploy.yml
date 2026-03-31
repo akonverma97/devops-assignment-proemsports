@@ -2,7 +2,14 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches:
+      - develop
+  workflow_dispatch:  # allows manual approval with input for main
+    inputs:
+      approval:
+        description: "Type 'approve', 'accept', 'continue', or 'done' to deploy main"
+        required: false
+        default: ""
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/devops-app
@@ -10,51 +17,64 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    if: github.ref != 'refs/heads/main' || github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v3
-
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
       - name: Build and push service-a
         run: |
-          IMAGE=${IMAGE_NAME}:${{ github.sha }}
-          echo "Building image: $IMAGE"
-
-          docker build -t $IMAGE ./service-a
-          docker push $IMAGE
+          IMAGE_SHA=${IMAGE_NAME}:${{ github.sha }}
+          IMAGE_BRANCH=${IMAGE_NAME}:${{ github.ref_name }}
+          docker build -t $IMAGE_SHA -t $IMAGE_BRANCH ./service-a
+          docker push $IMAGE_SHA
+          docker push $IMAGE_BRANCH
 
   deploy:
     runs-on: self-hosted
     needs: build
+    if: github.ref == 'refs/heads/main' || github.ref_name == 'develop'
 
     steps:
       - uses: actions/checkout@v3
 
+      # Manual text-based approval for main
+      - name: Wait for Approval (main branch)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          APPROVAL="${{ github.event.inputs.approval }}"
+          echo "Approval input: $APPROVAL"
+          APPROVAL_LOWER=$(echo "$APPROVAL" | tr '[:upper:]' '[:lower:]')
+          if [[ "$APPROVAL_LOWER" != "approve" && "$APPROVAL_LOWER" != "accept" && "$APPROVAL_LOWER" != "continue" && "$APPROVAL_LOWER" != "done" ]]; then
+            echo "Deployment not approved! Please provide approval, accept, continue, or done."
+            exit 1
+          fi
+          echo "Approved ✅, continuing deployment..."
+
+      - name: Set deployment environment
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            NAMESPACE="production"
+          else
+            NAMESPACE="staging"
+          fi
+          echo "DEPLOY_NAMESPACE=$NAMESPACE" >> $GITHUB_ENV
+          IMAGE=${IMAGE_NAME}:${{ github.sha }}
+          echo "DEPLOY_IMAGE=$IMAGE" >> $GITHUB_ENV
+
       - name: Deploy to Kubernetes
         run: |
-          IMAGE=${IMAGE_NAME}:${{ github.sha }}
-          echo "Deploying image: $IMAGE"
+          export IMAGE=$DEPLOY_IMAGE
+          export NAMESPACE=$DEPLOY_NAMESPACE
+          envsubst < k8s/deployment.yaml | kubectl apply -n $NAMESPACE -f -
+          kubectl rollout status deployment/service-a -n $DEPLOY_NAMESPACE --timeout=180s
 
-          kubectl apply -f k8s/deployment.yaml
-
-          # Update deployment with correct tagged image
-          kubectl set image deployment/service-a service-a=$IMAGE
-
-          kubectl rollout status deployment/service-a --timeout=120s
-
-      - name: Wait for Pods to be Ready
+      - name: Wait for Pods to be ready
         run: |
-          kubectl wait --for=condition=ready pod -l app=service-a --timeout=120s
-          kubectl get pods
+          kubectl wait --for=condition=ready pod -l app=service-a -n $DEPLOY_NAMESPACE --timeout=180s
+          kubectl get pods -n $DEPLOY_NAMESPACE
 
-      - name: Verify deployment
+      - name: Verify service health
         run: |
-          POD=$(kubectl get pod -l app=service-a -o jsonpath="{.items[0].metadata.name}")
-          echo "Using pod: $POD"
-
-          kubectl port-forward pod/$POD 5000:5000 > /dev/null 2>&1 &
-          sleep 5
-
-          curl --fail http://localhost:5000/health
+          POD=$(kubectl get pod -l app=service-a -n $DEPLOY_NAMESPACE -o jsonpath="{.items[0].metadata.name}")
+          kubectl exec -n $DEPLOY_NAMESPACE $POD -- curl -sSf http://localhost:5000/health

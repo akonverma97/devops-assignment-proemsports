@@ -21,7 +21,7 @@
 | 11 | Missing vpc_id in security group | 🟠 SECURITY | `terraform/main.tf` |
 | 12 | All values hardcoded — no variables | 🟡 RELIABILITY | `terraform/main.tf` |
 | 13 | Missing VPC, subnet, IGW and route table | 🟡 RELIABILITY | `terraform/main.tf` |
-| 14 | remove latest tag, implement SHA-based image tagging and dynamic Kubernetes deployment | 🟡 RELIABILITY | `.github/workflows/deploy.yml` |
+| 14 | Remove latest tag, implement SHA-based image tagging, dynamic Kubernetes deployment, and manual approval for main branch | 🟡 RELIABILITY | `.github/workflows/deploy.yml` |
  
 ---
 
@@ -788,3 +788,58 @@ This ensures:
 * The image tag is always available
 * The same image is consistently used across build and deploy stages
 * The pipeline is more reliable and avoids variable passing issues
+
+---
+
+
+## Fix : Improved deployment workflow with dual tagging, environment support, and manual approval
+
+**What was improved:**
+
+1. **Dual image tags:**  
+   The pipeline now builds and pushes Docker images with both the commit SHA and branch name.  
+   - SHA ensures traceability to the exact commit.  
+   - Branch tags make it easier to deploy staging/dev versions.
+
+2. **Dynamic deployment:**  
+   Uses `envsubst` to inject the correct Docker image and namespace directly into the Kubernetes deployment YAML.  
+   - Removes the need for `kubectl set image` after deployment.  
+   - Keeps YAML as the single source of truth.
+
+3. **Environment support:**  
+   Automatically selects namespace based on branch:  
+   - `main` → production  
+   - `develop` → staging  
+
+4. **Health check without port-forward:**  
+   The health endpoint is verified using `kubectl exec` instead of port-forwarding, making the pipeline more reliable and scalable.
+
+5. **Rollout wait:**  
+   Deployment waits until all pods are ready using `kubectl rollout status` and `kubectl wait`.  
+   - Ensures that the service is fully up before the next steps.
+
+6. **Timeouts:**  
+   Applied timeouts to rollout and readiness checks to prevent the pipeline from hanging indefinitely.
+
+7. **Manual approval for main branch:**  
+   Added workflow_dispatch input for main branch deployment, allowing a reviewer to type:  
+   - `approve`, `accept`, `continue`, or `done` to approve deployment.  
+   - This replaces the default GitHub “Approve” button and gives flexible manual approval.  
+   - Staging (develop branch) still deploys automatically without approval.
+
+**Why it is a problem if not fixed:**
+
+- Using only `latest` or a single tag makes it hard to trace which commit is deployed.  
+- Static deployment without dynamic injection requires manual updates for each image.  
+- Health checks via port-forwarding are unreliable in CI/CD and can block jobs.  
+- Not waiting for rollout can lead to tests running against unready pods.  
+- Main branch deployment without manual approval can lead to accidental production deploys.
+
+**How it was fixed:**
+
+- Added dual image tags (`SHA` + `branch`) during build.  
+- Injected the image and namespace dynamically into the deployment using `envsubst`.  
+- Added branch-based namespace selection for staging/production.  
+- Replaced port-forward health checks with `kubectl exec`.  
+- Used rollout status and readiness waits with proper timeouts.  
+- Added manual text-based approval for main branch deployment using `workflow_dispatch` input.
