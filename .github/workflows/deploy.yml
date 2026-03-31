@@ -2,9 +2,9 @@ name: CI/CD with Manual Issue Approval
 
 on:
   push:
-    branches: [main]  # build triggers on push
+    branches: [main]   # Build runs automatically on push
   issue_comment:
-    types: [created]  # deploy triggers on comment
+    types: [created]   # Deploy triggers on comment
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/devops-app
@@ -12,43 +12,60 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-image.outputs.IMAGE_TAG }}
     steps:
       - uses: actions/checkout@v3
+
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
       - name: Build and push service-a
         run: |
-          IMAGE=${IMAGE_NAME}:${{ github.sha }}
+          IMAGE=${IMAGE_NAME}:${GITHUB_SHA}
           echo "Building image: $IMAGE"
           docker build -t $IMAGE ./service-a
           docker push $IMAGE
-      - name: Save image tag
-        id: save-image
-        run: echo "IMAGE_TAG=${IMAGE_NAME}:${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=$IMAGE" >> $GITHUB_OUTPUT
+        id: set-image
 
   deploy:
-    if: github.event_name == 'issue_comment'  # deploy triggers only on comment
+    if: github.event_name == 'issue_comment'  # Only run deploy on comment
     runs-on: self-hosted
     needs: build
     steps:
       - uses: actions/checkout@v3
+
       - name: Check comment for approval
-        id: check
         run: |
-          COMMENT="${{ github.event.comment.body,, }}"
+          # Convert comment to lowercase
+          COMMENT="${GITHUB_EVENT_COMMENT_BODY,,}"
           echo "Comment received: $COMMENT"
+
+          # Check if it contains approve/done/continue
           if [[ ! "$COMMENT" =~ approve|done|continue ]]; then
             echo "Not an approval comment. Exiting."
             exit 1
           fi
+          echo "Approved for deployment."
+
       - name: Deploy to Kubernetes
         run: |
-          IMAGE=${{ needs.build.outputs.IMAGE_TAG }}
+          IMAGE=${{ needs.build.outputs.image_tag }}
           echo "Deploying image: $IMAGE"
           kubectl apply -f k8s/deployment.yaml
           kubectl set image deployment/service-a service-a=$IMAGE
           kubectl rollout status deployment/service-a --timeout=120s
-      - name: Wait for Pods
+
+      - name: Wait for Pods to be Ready
         run: |
           kubectl wait --for=condition=ready pod -l app=service-a --timeout=120s
           kubectl get pods
+
+      - name: Verify deployment
+        run: |
+          POD=$(kubectl get pod -l app=service-a -o jsonpath="{.items[0].metadata.name}")
+          echo "Using pod: $POD"
+          kubectl port-forward pod/$POD 5000:5000 > /dev/null 2>&1 &
+          sleep 5
+          curl --fail http://localhost:5000/health
