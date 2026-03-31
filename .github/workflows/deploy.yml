@@ -4,9 +4,15 @@ on:
   push:
     branches: [main]
 
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/devops-app
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
 
     steps:
       - uses: actions/checkout@v3
@@ -15,26 +21,45 @@ jobs:
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Build and push service-a
+        id: build
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/devops-app:latest ./service-a
-          docker push ${{ secrets.DOCKER_USERNAME }}/devops-app:latest
+          IMAGE=${IMAGE_NAME}:${{ github.sha }}
+
+          docker build -t $IMAGE ./service-a
+          docker push $IMAGE
+
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
   deploy:
-    runs-on: self-hosted        # ← runs on your Mac
-    needs: build                # ← waits for build job to finish
+    runs-on: self-hosted
+    needs: build
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Deploy to local Kubernetes
+      - name: Set image variable
+        run: echo "IMAGE=${{ needs.build.outputs.image }}" >> $GITHUB_ENV
+
+      - name: Deploy to Kubernetes
         run: |
           kubectl apply -f k8s/deployment.yaml
-          kubectl rollout restart deployment/service-a
-          kubectl rollout status deployment/service-a --timeout=60s
+
+          # Update deployment with new image (NO latest anymore)
+          kubectl set image deployment/service-a service-a=$IMAGE
+
+          kubectl rollout status deployment/service-a --timeout=120s
+
+      - name: Wait for Pods to be Ready
+        run: |
+          kubectl wait --for=condition=ready pod -l app=service-a --timeout=120s
+          kubectl get pods
 
       - name: Verify deployment
         run: |
-          kubectl get pods
-          kubectl port-forward svc/service-a 5000:5000 &
-          sleep 3
-          curl http://localhost:5000/health
+          POD=$(kubectl get pod -l app=service-a -o jsonpath="{.items[0].metadata.name}")
+          echo "Using pod: $POD"
+
+          kubectl port-forward pod/$POD 5000:5000 > /dev/null 2>&1 &
+          sleep 5
+
+          curl --fail http://localhost:5000/health
