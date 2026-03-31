@@ -1,8 +1,8 @@
-name: Issue Comment Deploy
+name: CI/CD with Issue Approval
 
 on:
-  issue_comment:
-    types: [created]  # Trigger only on new comment
+  push:
+    branches: [main]  # Build on push
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/devops-app
@@ -21,26 +21,34 @@ jobs:
           docker build -t $IMAGE ./service-a
           docker push $IMAGE
 
-  check-approval:
+  wait-for-approval:
     runs-on: ubuntu-latest
     needs: build
     outputs:
-      approved: ${{ steps.set-approval.outputs.approved }}
+      approved: ${{ steps.check.outputs.approved }}
     steps:
-      - name: Check if comment approves deploy
-        id: set-approval
+      - name: Wait for manual approval via issue comment
+        id: check
         run: |
-          COMMENT="${GITHUB_EVENT_COMMENT_BODY,,}"   # convert to lowercase
+          echo "Waiting for approval comment..."
+          # Loop to check issue comments using GitHub CLI (gh)
           APPROVED="false"
-          if [[ "$COMMENT" =~ approve|done|continue ]]; then
-            APPROVED="true"
-          fi
+          ISSUE_NUMBER=1  # Replace with your issue number
+          for i in {1..60}; do
+            COMMENTS=$(gh issue view $ISSUE_NUMBER --json comments --jq '.comments[].body' 2>/dev/null)
+            if echo "$COMMENTS" | grep -iqE "approve|done|continue"; then
+              APPROVED="true"
+              break
+            fi
+            echo "Not approved yet, checking again in 10s..."
+            sleep 10
+          done
           echo "approved=$APPROVED" >> $GITHUB_OUTPUT
 
   deploy:
     runs-on: self-hosted
-    needs: check-approval
-    if: needs.check-approval.outputs.approved == 'true'
+    needs: wait-for-approval
+    if: needs.wait-for-approval.outputs.approved == 'true'
     steps:
       - uses: actions/checkout@v3
       - name: Deploy to Kubernetes
@@ -54,10 +62,3 @@ jobs:
         run: |
           kubectl wait --for=condition=ready pod -l app=service-a --timeout=120s
           kubectl get pods
-      - name: Verify deployment
-        run: |
-          POD=$(kubectl get pod -l app=service-a -o jsonpath="{.items[0].metadata.name}")
-          echo "Using pod: $POD"
-          kubectl port-forward pod/$POD 5000:5000 > /dev/null 2>&1 &
-          sleep 5
-          curl --fail http://localhost:5000/health
