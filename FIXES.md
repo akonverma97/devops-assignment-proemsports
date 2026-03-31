@@ -21,6 +21,7 @@
 | 11 | Missing vpc_id in security group | 🟠 SECURITY | `terraform/main.tf` |
 | 12 | All values hardcoded — no variables | 🟡 RELIABILITY | `terraform/main.tf` |
 | 13 | Missing VPC, subnet, IGW and route table | 🟡 RELIABILITY | `terraform/main.tf` |
+| 14 | remove latest tag, implement SHA-based image tagging and dynamic Kubernetes deployment | 🟡 RELIABILITY | `.github/workflows/deploy.yml` |
  
 ---
 
