@@ -1,8 +1,10 @@
-name: CI/CD with Issue Approval
+name: CI/CD with Manual Issue Approval
 
 on:
   push:
-    branches: [main]  # Build on push
+    branches: [main]  # build triggers on push
+  issue_comment:
+    types: [created]  # deploy triggers on comment
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/devops-app
@@ -20,45 +22,33 @@ jobs:
           echo "Building image: $IMAGE"
           docker build -t $IMAGE ./service-a
           docker push $IMAGE
-
-  wait-for-approval:
-    runs-on: ubuntu-latest
-    needs: build
-    outputs:
-      approved: ${{ steps.check.outputs.approved }}
-    steps:
-      - name: Wait for manual approval via issue comment
-        id: check
-        run: |
-          echo "Waiting for approval comment..."
-          # Loop to check issue comments using GitHub CLI (gh)
-          APPROVED="false"
-          ISSUE_NUMBER=1  # Replace with your issue number
-          for i in {1..60}; do
-            COMMENTS=$(gh issue view $ISSUE_NUMBER --json comments --jq '.comments[].body' 2>/dev/null)
-            if echo "$COMMENTS" | grep -iqE "approve|done|continue"; then
-              APPROVED="true"
-              break
-            fi
-            echo "Not approved yet, checking again in 10s..."
-            sleep 10
-          done
-          echo "approved=$APPROVED" >> $GITHUB_OUTPUT
+      - name: Save image tag
+        id: save-image
+        run: echo "IMAGE_TAG=${IMAGE_NAME}:${GITHUB_SHA}" >> $GITHUB_OUTPUT
 
   deploy:
+    if: github.event_name == 'issue_comment'  # deploy triggers only on comment
     runs-on: self-hosted
-    needs: wait-for-approval
-    if: needs.wait-for-approval.outputs.approved == 'true'
+    needs: build
     steps:
       - uses: actions/checkout@v3
+      - name: Check comment for approval
+        id: check
+        run: |
+          COMMENT="${{ github.event.comment.body,, }}"
+          echo "Comment received: $COMMENT"
+          if [[ ! "$COMMENT" =~ approve|done|continue ]]; then
+            echo "Not an approval comment. Exiting."
+            exit 1
+          fi
       - name: Deploy to Kubernetes
         run: |
-          IMAGE=${IMAGE_NAME}:${{ github.sha }}
+          IMAGE=${{ needs.build.outputs.IMAGE_TAG }}
           echo "Deploying image: $IMAGE"
           kubectl apply -f k8s/deployment.yaml
           kubectl set image deployment/service-a service-a=$IMAGE
           kubectl rollout status deployment/service-a --timeout=120s
-      - name: Wait for Pods to be Ready
+      - name: Wait for Pods
         run: |
           kubectl wait --for=condition=ready pod -l app=service-a --timeout=120s
           kubectl get pods
