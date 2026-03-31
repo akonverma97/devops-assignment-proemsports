@@ -735,3 +735,55 @@ This means adding a new tag only requires changing one place — the `locals` bl
  
 ---
 
+
+## Fix : Docker image tag not passed to deployment
+
+**What was wrong:**
+
+The CI/CD pipeline attempted to pass the Docker image tag from the build job to the deploy job using GitHub Actions outputs:
+
+```
+echo "image=$IMAGE" >> $GITHUB_OUTPUT
+```
+
+and then:
+
+```
+echo "IMAGE=${{ needs.build.outputs.image }}" >> $GITHUB_ENV
+```
+
+However, the `IMAGE` variable was not properly set in the deploy job, resulting in an empty value.
+
+---
+
+**Why it is a problem:**
+
+Because the `IMAGE` variable was empty, the following command failed:
+
+```
+kubectl set image deployment/service-a service-a=$IMAGE
+```
+
+Kubernetes requires a valid image value, which resulted in the error:
+
+```
+spec.template.spec.containers[0].image: Required value
+```
+
+This caused the deployment stage of the pipeline to fail.
+
+---
+
+**How I fixed it:**
+
+Instead of relying on GitHub Actions outputs, I reconstructed the Docker image tag directly in the deploy job using:
+
+```
+IMAGE=${IMAGE_NAME}:${{ github.sha }}
+```
+
+This ensures:
+
+* The image tag is always available
+* The same image is consistently used across build and deploy stages
+* The pipeline is more reliable and avoids variable passing issues
